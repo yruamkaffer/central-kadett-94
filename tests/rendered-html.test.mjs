@@ -29,6 +29,7 @@ test("mantém a identidade, o cache local e a sincronização", async () => {
 
   assert.match(cloud, /userAppState/);
   assert.match(cloud, /normalizeState/);
+  assert.match(cloud, /hasUserData\(data\.data\)/);
 });
 
 test("está preparado para Vercel e Firebase", async () => {
@@ -47,4 +48,13 @@ test("está preparado para Vercel e Firebase", async () => {
   assert.match(pkg.dependencies.firebase, /^\^12\./);
   assert.match(rules, /request\.auth\.uid == userId/);
   assert.match(rules, /userAppState/);
+});
+
+test("usa visual verde neon e silhueta personalizada do Kadett", async () => {
+  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+
+  assert.match(css, /--orange:#39ff14/);
+  assert.match(css, /filter:drop-shadow\(0 0 15px #39ff1455\)/);
+  assert.match(css, /clip-path:polygon\(1% 43%,9% 23%,25% 14%/);
+  assert.doesNotMatch(css, /#f16a2d/);
 });

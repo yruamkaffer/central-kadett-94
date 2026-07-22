@@ -59,11 +59,11 @@ export async function loadOrCreateCloudState(
   if (snapshot.exists()) {
     const data = snapshot.data() as CloudRow;
     if (isAppState(data.data)) {
-      const cloudState = normalizeState(data.data);
-      if (!hasUserData(cloudState)) {
+      if (!hasUserData(data.data)) {
         const saved = await saveCloudState(db, userId, emptyState);
         return { state: emptyState, updatedAt: saved, migratedLocalData: true };
       }
+      const cloudState = normalizeState(data.data);
       return { state: cloudState, updatedAt: data.updatedAt, migratedLocalData: false };
     }
   }
