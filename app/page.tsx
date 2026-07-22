@@ -302,7 +302,7 @@ function Cockpit({ state, openIssues, urgent, totalSpent, nextService, setView, 
     <PageHead eyebrow="VISÃO GERAL // VEÍCULO 01" title="Fala, piloto." text="Bora dar uma geral no Kadett e ver o que tá pegando." />
     <section className="vehicle-hero panel">
       <div className="vehicle-copy"><div className="hero-kicker">{state.vehicle.manufacturer.toUpperCase()} <span>•</span> {state.vehicle.year}</div><h2>KADETT <em>{state.vehicle.trim}</em></h2><p>{state.vehicle.engine} <span>•</span> {fuelType.toUpperCase()} <span>•</span> {color.toUpperCase()}</p><div className="mileage"><small>QUILOMETRAGEM ATUAL</small><strong>{state.vehicle.currentMileage ? state.vehicle.currentMileage.toLocaleString("pt-BR") : "— — — — — —"}<b> KM</b></strong><button onClick={() => setModal("mileage")}>ATUALIZAR →</button></div></div>
-      <div className="car-stage" aria-label="Representação gráfica lateral do Chevrolet Kadett"><div className="scanlines" /><div className="car-shape"><div className="car-roof" /><div className="car-body" /><i className="wheel one" /><i className="wheel two" /></div><span>VEÍCULO // PERFIL ESQUEMÁTICO</span></div>
+      <div className="car-stage" aria-label="Contorno vetorial lateral do Chevrolet Kadett"><div className="scanlines" /><div className="kadett-outline" role="img" aria-label="Silhueta esquemática do Kadett GLS 1994" /><span>KADETT GLS // CONTORNO OEM</span></div>
       <div className="hero-stamp"><span>BASE LOCAL</span><b>01</b></div>
     </section>
     <section className="metric-grid">

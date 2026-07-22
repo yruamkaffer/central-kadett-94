@@ -51,10 +51,17 @@ test("está preparado para Vercel e Firebase", async () => {
 });
 
 test("usa visual verde neon e silhueta personalizada do Kadett", async () => {
-  const css = await readFile(new URL("../app/globals.css", import.meta.url), "utf8");
+  const [page, css, svg] = await Promise.all([
+    readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
+    readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
+    readFile(new URL("../public/kadett-outline.svg", import.meta.url), "utf8"),
+  ]);
 
   assert.match(css, /--orange:#39ff14/);
-  assert.match(css, /filter:drop-shadow\(0 0 15px #39ff1455\)/);
-  assert.match(css, /clip-path:polygon\(1% 43%,9% 23%,25% 14%/);
+  assert.match(css, /kadett-outline\.svg/);
+  assert.match(css, /color:#eef4ef/);
+  assert.match(page, /KADETT GLS \/\/ CONTORNO OEM/);
+  assert.match(svg, /Contorno vetorial de Chevrolet Kadett/);
+  assert.doesNotMatch(page, /car-body/);
   assert.doesNotMatch(css, /#f16a2d/);
 });
