@@ -2,7 +2,10 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { emptyState, loadState, saveState, type AppState, type IssuePriority, type ModalKind } from "../src/storage/local-db";
+import { createUserWithEmailAndPassword, onAuthStateChanged, signInWithEmailAndPassword, signOut, type User } from "firebase/auth";
+import { emptyState, loadState, loadUserState, saveUserState, type AppState, type IssuePriority, type ModalKind } from "../src/storage/local-db";
+import { loadOrCreateCloudState, saveCloudState } from "../src/storage/cloud-sync";
+import { getFirebaseClients, type FirebaseClients } from "../src/firebase/client";
 import { componentHealth, formatBRL, nextComponentService, quoteSpread } from "../src/domain/calculations";
 
 const nav = [
@@ -19,16 +22,113 @@ function today() { return new Date().toISOString().slice(0, 10); }
 function dateBR(date?: string) { return date ? new Intl.DateTimeFormat("pt-BR").format(new Date(`${date}T12:00:00`)) : "Não informado"; }
 
 export default function Home() {
+  const firebase = useMemo(() => getFirebaseClients(), []);
   const [state, setState] = useState<AppState>(emptyState);
   const [ready, setReady] = useState(false);
+  const [user, setUser] = useState<User | null | undefined>(firebase ? undefined : null);
+  const [cloudReady, setCloudReady] = useState(false);
+  const [syncStatus, setSyncStatus] = useState<"connecting" | "syncing" | "synced" | "offline">("connecting");
   const [view, setView] = useState("cockpit");
   const [modal, setModal] = useState<ModalKind>(null);
-  const [notice, setNotice] = useState("Tá tudo salvo só neste navegador");
+  const [notice, setNotice] = useState("Conectando com a nuvem…");
   const [garage, setGarage] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
+  const stateRef = useRef(state);
+  const lastCloudUpdateRef = useRef("");
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => { loadState().then((saved) => { setState(saved); setReady(true); }); }, []);
-  useEffect(() => { if (ready) saveState(state); }, [state, ready]);
+  useEffect(() => { stateRef.current = state; }, [state]);
+
+  useEffect(() => {
+    if (!firebase) return;
+    return onAuthStateChanged(firebase.auth, (nextUser) => {
+      setUser(nextUser);
+      if (!nextUser) {
+        setCloudReady(false);
+        setState(emptyState);
+      }
+    });
+  }, [firebase]);
+
+  useEffect(() => {
+    if (!ready || !firebase || !user) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      setSyncStatus("connecting");
+      setNotice("Buscando seus dados na nuvem…");
+    });
+
+    loadUserState(user.uid)
+      .then((userState) => loadOrCreateCloudState(firebase.db, user.uid, userState ?? stateRef.current))
+      .then(async (result) => {
+        if (!active) return;
+        lastCloudUpdateRef.current = result.updatedAt;
+        stateRef.current = result.state;
+        setState(result.state);
+        await saveUserState(user.uid, result.state);
+        setCloudReady(true);
+        setSyncStatus("synced");
+        setNotice(result.migratedLocalData ? "Dados deste aparelho enviados pra nuvem" : "Tudo sincronizado na nuvem");
+      })
+      .catch(() => {
+        if (!active) return;
+        setCloudReady(true);
+        setSyncStatus("offline");
+        setNotice("Sem conexão: salvando neste aparelho por enquanto");
+      });
+
+    return () => { active = false; };
+  }, [ready, user, firebase]);
+
+  useEffect(() => {
+    if (!ready || !user) return;
+    saveUserState(user.uid, state);
+    if (!firebase || !cloudReady) return;
+
+    const timer = window.setTimeout(() => {
+      setSyncStatus("syncing");
+      saveQueueRef.current = saveQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            const updatedAt = await saveCloudState(firebase.db, user.uid, state);
+            lastCloudUpdateRef.current = updatedAt;
+            setSyncStatus("synced");
+            setNotice("Tudo sincronizado na nuvem");
+          } catch {
+            setSyncStatus("offline");
+            setNotice("Sem conexão: a cópia local continua segura");
+          }
+        });
+    }, 700);
+
+    return () => window.clearTimeout(timer);
+  }, [cloudReady, ready, user, state, firebase]);
+
+  useEffect(() => {
+    if (!firebase || !user || !cloudReady) return;
+    const refreshFromCloud = () => {
+      if (document.visibilityState === "hidden") return;
+      loadOrCreateCloudState(firebase.db, user.uid, stateRef.current)
+        .then((result) => {
+          if (result.updatedAt <= lastCloudUpdateRef.current) return;
+          lastCloudUpdateRef.current = result.updatedAt;
+          stateRef.current = result.state;
+          setState(result.state);
+          setSyncStatus("synced");
+          setNotice("Novidades carregadas da nuvem");
+        })
+        .catch(() => setSyncStatus("offline"));
+    };
+    window.addEventListener("focus", refreshFromCloud);
+    document.addEventListener("visibilitychange", refreshFromCloud);
+    return () => {
+      window.removeEventListener("focus", refreshFromCloud);
+      document.removeEventListener("visibilitychange", refreshFromCloud);
+    };
+  }, [cloudReady, user, firebase]);
 
   const expenses = useMemo(() => [
     ...state.services.map((s) => ({ id: s.id, date: s.date, category: "Manutenção", description: s.description, amount: s.total })),
@@ -40,7 +140,7 @@ export default function Home() {
   const nextService = state.components.map((c) => ({ ...c, next: nextComponentService(c, state.vehicle.currentMileage) }))
     .filter((c) => c.next).sort((a, b) => (a.next?.remainingKm ?? Infinity) - (b.next?.remainingKm ?? Infinity))[0];
 
-  function announce(message: string) { setNotice(message); window.setTimeout(() => setNotice("Tá tudo salvo só neste navegador"), 3000); }
+  function announce(message: string) { setNotice(message); window.setTimeout(() => setNotice(syncStatus === "offline" ? "Salvo neste aparelho; a nuvem tenta de novo depois" : "Tudo sincronizado na nuvem"), 3000); }
   function updateMileage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault(); const data = new FormData(event.currentTarget); const mileage = Number(data.get("mileage"));
     if (!Number.isFinite(mileage) || mileage < 0) return;
@@ -95,19 +195,22 @@ export default function Home() {
     ], settings: { ...s.settings, demoMode: true } })); announce("Dados demonstrativos ativados");
   }
 
-  if (!ready) return <main className="boot"><p className="eyebrow">CENTRAL KADETT 94</p><h1>Inicializando módulos locais…</h1><div className="bootline" /></main>;
+  if (!ready || user === undefined) return <main className="boot"><p className="eyebrow">CENTRAL KADETT 94</p><h1>Ligando os sistemas…</h1><div className="bootline" /></main>;
+  if (!firebase) return <AuthGate client={null} />;
+  if (!user) return <AuthGate client={firebase} />;
+  if (!cloudReady) return <main className="boot"><p className="eyebrow">CENTRAL KADETT 94</p><h1>Puxando sua garagem da nuvem…</h1><div className="bootline" /></main>;
   if (garage) return <GarageMode state={state} setState={setState} onExit={() => setGarage(false)} onModal={setModal} />;
 
   return <div className="app-shell">
     <a className="skip-link" href="#conteudo">Pular para o conteúdo</a>
     <header className="topbar">
       <button className="brand" onClick={() => setView("cockpit")} aria-label="Ir para o cockpit"><span className="brand-mark">K94</span><span><b>CENTRAL KADETT</b><small>COMPUTADOR DE BORDO PESSOAL</small></span></button>
-      <div className="top-status"><span className="signal"><i /> LOCAL</span><span className="clock">{new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date()).toUpperCase()}</span></div>
+      <div className="top-status"><span className={`signal ${syncStatus}`}><i /> {syncStatus === "synced" ? "NA NUVEM" : syncStatus === "offline" ? "OFFLINE" : "SINCRONIZANDO"}</span><span className="clock">{new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", year: "numeric" }).format(new Date()).toUpperCase()}</span><button className="account-button" onClick={() => signOut(firebase.auth)} title={user.email ?? "Conta Firebase"}>SAIR</button></div>
       <button className="garage-button" onClick={() => setGarage(true)}><span>▣</span> BORA PRA GARAGEM</button>
     </header>
     <aside className="sidebar" aria-label="Navegação principal">
       <nav>{nav.map(([id, label, num]) => <button key={id} className={view === id ? "active" : ""} onClick={() => setView(id)}><span>{num}</span>{label}</button>)}</nav>
-      <div className="privacy-note"><i className="signal-dot" /><div><b>ARMAZENAMENTO LOCAL</b><small>Nenhum dado sai deste dispositivo</small></div></div>
+      <div className="privacy-note"><i className="signal-dot" /><div><b>GARAGEM NA NUVEM</b><small>Dados privados e sincronizados</small></div></div>
     </aside>
     <main id="conteudo" className="content" tabIndex={-1}>
       {view === "cockpit" && <Cockpit state={state} openIssues={openIssues} urgent={urgent} totalSpent={totalSpent} nextService={nextService} setView={setView} setModal={setModal} />}
@@ -123,10 +226,69 @@ export default function Home() {
       {view === "configuracoes" && <SettingsView state={state} setState={setState} exportBackup={exportBackup} importRef={importRef} loadDemo={loadDemo} />}
       <LegalFoot />
     </main>
-    <footer className="statusbar"><span>SCHEMA v{state.schemaVersion}.0</span><span aria-live="polite">● {notice}</span><span>PRIVADO • SEM LOGIN</span></footer>
+    <footer className="statusbar"><span>SCHEMA v{state.schemaVersion}.0</span><span aria-live="polite">● {notice}</span><span>PRIVADO • {user.email}</span></footer>
     <input ref={importRef} className="sr-only" type="file" accept="application/json" onChange={(e) => importBackup(e.target.files?.[0])} />
     {modal && <Modal kind={modal} state={state} onClose={() => setModal(null)} handlers={{ updateMileage, addIssue, addService, addComponent, addQuote, addFuel }} />}
   </div>;
+}
+
+function AuthGate({ client }: { client: FirebaseClients | null }) {
+  const [mode, setMode] = useState<"login" | "signup">("login");
+  const [message, setMessage] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+
+  async function authenticate(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!client) return;
+    const form = new FormData(event.currentTarget);
+    const email = String(form.get("email") || "").trim();
+    const password = String(form.get("password") || "");
+    setSubmitting(true);
+    setMessage("");
+
+    try {
+      if (mode === "login") {
+        await signInWithEmailAndPassword(client.auth, email, password);
+      } else {
+        await createUserWithEmailAndPassword(client.auth, email, password);
+      }
+    } catch (error) {
+      const code = typeof error === "object" && error && "code" in error ? String(error.code) : "";
+      setMessage(firebaseAuthMessage(code));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return <main className="auth-screen">
+    <section className="auth-card panel">
+      <div className="auth-brand"><span className="brand-mark">K94</span><div><p className="eyebrow">CENTRAL KADETT 94</p><h1>Sua garagem, onde você estiver.</h1></div></div>
+      <p>Entra pra abrir, editar e alimentar o histórico no celular, no PC ou naquela parada rápida na oficina.</p>
+      {!client ? <div className="auth-alert"><b>Nuvem ainda não conectada</b><span>Faltam as variáveis públicas do Firebase neste ambiente.</span></div> : <>
+        <div className="auth-tabs" role="tablist">
+          <button role="tab" aria-selected={mode === "login"} className={mode === "login" ? "active" : ""} onClick={() => { setMode("login"); setMessage(""); }} type="button">JÁ TENHO CONTA</button>
+          <button role="tab" aria-selected={mode === "signup"} className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setMessage(""); }} type="button">CRIAR CONTA</button>
+        </div>
+        <form onSubmit={authenticate}>
+          <Field label="E-mail"><input name="email" type="email" autoComplete="email" required autoFocus /></Field>
+          <Field label="Senha"><input name="password" type="password" minLength={6} autoComplete={mode === "login" ? "current-password" : "new-password"} required /></Field>
+          {message && <p className="auth-message" role="status">{message}</p>}
+          <button className="primary auth-submit" disabled={submitting}>{submitting ? "CONECTANDO…" : mode === "login" ? "ABRIR MINHA GARAGEM" : "CRIAR MINHA CONTA"}</button>
+        </form>
+      </>}
+      <small>Seus registros ficam protegidos por login e cada conta só enxerga os próprios dados.</small>
+    </section>
+  </main>;
+}
+
+function firebaseAuthMessage(code: string) {
+  if (code === "auth/invalid-credential" || code === "auth/user-not-found" || code === "auth/wrong-password") {
+    return "E-mail ou senha não bateram. Dá uma conferida.";
+  }
+  if (code === "auth/email-already-in-use") return "Esse e-mail já tem garagem. Vai em entrar e manda ver.";
+  if (code === "auth/weak-password") return "Essa senha tá fraca. Usa pelo menos 6 caracteres.";
+  if (code === "auth/invalid-email") return "Esse e-mail parece meio torto. Confere e tenta de novo.";
+  return "Não deu pra conectar agora. Tenta de novo daqui a pouco.";
 }
 
 function PageHead({ eyebrow, title, text, action, onAction }: { eyebrow: string; title: string; text: string; action?: string; onAction?: () => void }) {
@@ -167,7 +329,7 @@ function ExpensesView({ expenses, total }: any) { const maintenance = expenses.f
 
 function FuelView({ state, setModal }: any) { let average: number | null = null; const full = state.fuel.filter((f: any) => f.fullTank).sort((a: any,b: any) => a.mileage-b.mileage); if (full.length >= 2) { const distance = full.at(-1).mileage - full[0].mileage; const liters = full.slice(1).reduce((s: number,f: any)=>s+f.liters,0); if(distance>0&&liters>0) average=distance/liters; } return <><PageHead eyebrow="REGISTRO DE CONSUMO" title="Abastecimentos" text="Médias só aparecem quando há dados de tanque completo suficientes." action="Novo abastecimento" onAction={() => setModal("fuel")} /><section className="fuel-metrics"><div className="panel"><small>CONSUMO MÉDIO</small><strong>{average ? `${average.toFixed(1)} km/l` : "Dados insuficientes"}</strong></div><div className="panel"><small>ABASTECIMENTOS</small><strong>{state.fuel.length}</strong></div><div className="panel"><small>ÚLTIMO PREÇO</small><strong>{state.fuel[0] ? `${formatBRL(state.fuel[0].pricePerLiter)}/l` : "Não informado"}</strong></div></section>{state.fuel.length ? <div className="timeline">{state.fuel.map((f: any)=><article className="timeline-item panel" key={f.id}><time>{dateBR(f.date)}<small>{f.mileage.toLocaleString("pt-BR")} km</small></time><div><span>{f.fullTank ? "TANQUE COMPLETO" : "PARCIAL"}</span><h3>{f.liters.toFixed(1)} litros</h3><p>{f.station || "Posto não informado"} • {f.fuelType}</p></div><strong>{formatBRL(f.total)}</strong></article>)}</div> : <EmptyCard title="Nenhum abastecimento" text="Registre dois tanques completos consecutivos para calcular uma média confiável." action="Registrar abastecimento" onAction={() => setModal("fuel")} />}</> }
 
-function SettingsView({ state, setState, exportBackup, importRef, loadDemo }: any) { return <><PageHead eyebrow="SISTEMA // PREFERÊNCIAS" title="Configurações e backup" text="Cada navegador possui sua própria base local. Faça backups regularmente." /><div className="settings-grid"><section className="panel settings-card"><span>01</span><div><small>BACKUP COMPLETO</small><h2>Proteja seu histórico</h2><p>Exporte todos os registros para um arquivo JSON ou restaure um arquivo válido.</p><div className="button-row"><button className="primary" onClick={exportBackup}>EXPORTAR BACKUP</button><button className="secondary" onClick={() => importRef.current?.click()}>IMPORTAR</button></div><small>ÚLTIMO BACKUP: {state.settings.lastBackupAt ? dateBR(state.settings.lastBackupAt.slice(0,10)) : "NUNCA"}</small></div></section><section className="panel settings-card"><span>02</span><div><small>DADOS DEMONSTRATIVOS</small><h2>Explore sem compromisso</h2><p>Carregue exemplos claramente identificados para testar pendências e orçamentos.</p><button className="secondary" onClick={loadDemo} disabled={state.settings.demoMode}>{state.settings.demoMode ? "DEMONSTRAÇÃO ATIVA" : "CARREGAR DEMONSTRAÇÃO"}</button></div></section><section className="panel settings-card danger"><span>03</span><div><small>ZONA DE CUIDADO</small><h2>Limpar base local</h2><p>Esta ação apaga os dados deste navegador. Exporte um backup antes.</p><button onClick={() => { if (window.confirm("Apagar todos os dados locais? Esta ação não pode ser desfeita.")) setState(emptyState); }}>LIMPAR TODOS OS DADOS</button></div></section></div></> }
+function SettingsView({ state, setState, exportBackup, importRef, loadDemo }: any) { return <><PageHead eyebrow="SISTEMA // PREFERÊNCIAS" title="Configurações e backup" text="A nuvem mantém sua garagem igual em todos os aparelhos. O backup em arquivo continua disponível como segurança extra." /><div className="settings-grid"><section className="panel settings-card"><span>01</span><div><small>BACKUP COMPLETO</small><h2>Proteja seu histórico</h2><p>Exporte todos os registros para um arquivo JSON ou restaure um arquivo válido.</p><div className="button-row"><button className="primary" onClick={exportBackup}>EXPORTAR BACKUP</button><button className="secondary" onClick={() => importRef.current?.click()}>IMPORTAR</button></div><small>ÚLTIMO BACKUP: {state.settings.lastBackupAt ? dateBR(state.settings.lastBackupAt.slice(0,10)) : "NUNCA"}</small></div></section><section className="panel settings-card"><span>02</span><div><small>DADOS DEMONSTRATIVOS</small><h2>Explore sem compromisso</h2><p>Carregue exemplos claramente identificados para testar pendências e orçamentos.</p><button className="secondary" onClick={loadDemo} disabled={state.settings.demoMode}>{state.settings.demoMode ? "DEMONSTRAÇÃO ATIVA" : "CARREGAR DEMONSTRAÇÃO"}</button></div></section><section className="panel settings-card danger"><span>03</span><div><small>ZONA DE CUIDADO</small><h2>Zerar a garagem</h2><p>Esta ação apaga os dados sincronizados da sua conta. Exporte um backup antes.</p><button onClick={() => { if (window.confirm("Apagar todos os dados da sua garagem? Esta ação será sincronizada e não pode ser desfeita.")) setState(emptyState); }}>LIMPAR TODOS OS DADOS</button></div></section></div></> }
 
 function EmptyView({ eyebrow, title, text, action }: any) { return <><PageHead eyebrow={eyebrow} title={title} text={text} /><EmptyCard title="Espaço pronto — bora abastecer isso" text="A base tá no jeito. Os próximos registros vão transformar este módulo no dossiê do carro." action={action} /></> }
 function EmptyCard({ title, text, action, onAction }: any) { return <div className="empty-card panel"><span>＋</span><h2>{title}</h2><p>{text}</p>{action && <button className="primary" onClick={onAction}>{action}</button>}</div> }
@@ -176,7 +338,7 @@ function GarageMode({ state, setState, onExit, onModal }: any) { const tasks = s
 
 function Modal({ kind, state, onClose, handlers }: any) {
   const config: Record<string, [string, (e: FormEvent<HTMLFormElement>) => void]> = { mileage: ["Atualizar quilometragem", handlers.updateMileage], issue: ["Nova pendência", handlers.addIssue], service: ["Registrar serviço", handlers.addService], component: ["Novo componente", handlers.addComponent], quote: ["Adicionar orçamento", handlers.addQuote], fuel: ["Novo abastecimento", handlers.addFuel] };
-  return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><div><small>NOVO REGISTRO LOCAL</small><h2 id="modal-title">{config[kind][0]}</h2></div><button onClick={onClose} aria-label="Fechar">×</button></header><form onSubmit={config[kind][1]}>
+  return <div className="modal-backdrop" role="presentation" onMouseDown={(e) => e.target === e.currentTarget && onClose()}><section className="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><header><div><small>NOVO REGISTRO SINCRONIZADO</small><h2 id="modal-title">{config[kind][0]}</h2></div><button onClick={onClose} aria-label="Fechar">×</button></header><form onSubmit={config[kind][1]}>
     {kind === "mileage" && <Field label="Quilometragem atual"><input name="mileage" type="number" min="0" defaultValue={state.vehicle.currentMileage || ""} required autoFocus /></Field>}
     {kind === "issue" && <><Field label="Título"><input name="title" required autoFocus placeholder="Ex.: Ruído ao frear" /></Field><div className="form-grid"><Field label="Sistema"><select name="subsystem">{systems.map((s) => <option key={s}>{s}</option>)}</select></Field><Field label="Prioridade"><select name="priority"><option>Baixa</option><option>Média</option><option>Alta</option><option>Crítica</option></select></Field></div><Field label="Descrição / fonte"><textarea name="description" placeholder="Descreva o sintoma ou a avaliação recebida" /></Field><Field label="Estimativa manual (R$)"><input name="estimatedCost" type="number" min="0" step="0.01" /></Field></>}
     {kind === "service" && <><div className="form-grid"><Field label="Data"><input name="date" type="date" defaultValue={today()} required /></Field><Field label="Quilometragem"><input name="mileage" type="number" defaultValue={state.vehicle.currentMileage || ""} /></Field></div><Field label="Descrição"><input name="description" required autoFocus placeholder="Serviço executado" /></Field><div className="form-grid"><Field label="Tipo"><select name="type"><option>Corretiva</option><option>Preventiva</option><option>Inspeção</option><option>Estética</option></select></Field><Field label="Oficina / responsável"><input name="provider" /></Field></div><Field label="Pendência resolvida"><select name="issueId"><option value="">Nenhuma</option>{state.issues.filter((i: any)=>i.status!=="Resolvida").map((i: any)=><option key={i.id} value={i.id}>{i.title}</option>)}</select></Field><div className="form-grid three"><Field label="Peças (R$)"><input name="partsCost" type="number" min="0" step="0.01" /></Field><Field label="Mão de obra"><input name="laborCost" type="number" min="0" step="0.01" /></Field><Field label="Outros"><input name="otherCost" type="number" min="0" step="0.01" /></Field></div></>}

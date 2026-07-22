@@ -23,3 +23,26 @@ const STORE = "state";
 function openDB(): Promise<IDBDatabase> { return new Promise((resolve, reject) => { const request = indexedDB.open(DB_NAME, 1); request.onupgradeneeded = () => request.result.createObjectStore(STORE); request.onsuccess = () => resolve(request.result); request.onerror = () => reject(request.error); }); }
 export async function loadState(): Promise<AppState> { try { const db = await openDB(); return await new Promise((resolve) => { const request = db.transaction(STORE).objectStore(STORE).get("main"); request.onsuccess = () => resolve(request.result ?? emptyState); request.onerror = () => resolve(emptyState); }); } catch { return emptyState; } }
 export async function saveState(state: AppState) { try { const db = await openDB(); const tx = db.transaction(STORE, "readwrite"); tx.objectStore(STORE).put(state, "main"); } catch { /* Interface remains usable if browser storage is unavailable. */ } }
+
+export async function loadUserState(userId: string): Promise<AppState | null> {
+  try {
+    const db = await openDB();
+    return await new Promise((resolve) => {
+      const request = db.transaction(STORE).objectStore(STORE).get(`user:${userId}`);
+      request.onsuccess = () => resolve(request.result ?? null);
+      request.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function saveUserState(userId: string, state: AppState) {
+  try {
+    const db = await openDB();
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).put(state, `user:${userId}`);
+  } catch {
+    /* The cloud copy remains authoritative if browser storage is unavailable. */
+  }
+}
