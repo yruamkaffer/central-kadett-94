@@ -9,15 +9,26 @@ test("mantém a identidade, o cache local e a sincronização", async () => {
     readFile(new URL("../src/storage/local-db.ts", import.meta.url), "utf8"),
     readFile(new URL("../src/storage/cloud-sync.ts", import.meta.url), "utf8"),
   ]);
+
   assert.match(layout, /lang="pt-BR"/);
   assert.match(layout, /Central Kadett 94/);
   assert.match(page, /Fala, piloto/);
   assert.match(page, /BORA PRA GARAGEM/);
   assert.match(page, /EXPORTAR BACKUP/);
-  assert.match(storage, /indexedDB\.open/);
-  assert.match(storage, /fuelType: "Não confirmado"/);
-  assert.match(cloud, /userAppState/);
   assert.match(page, /Tudo sincronizado na nuvem/);
+  assert.match(page, /LibraryView/);
+  assert.match(page, /HistoryView/);
+
+  assert.match(storage, /indexedDB\.open/);
+  assert.match(storage, /fuelType: "Gasolina"/);
+  assert.match(storage, /currentMileage: 528574/);
+  assert.match(storage, /Fumaça branca\/azulada/);
+  assert.match(storage, /GM Argenta/);
+  assert.match(storage, /library:/);
+  assert.match(storage, /timeline:/);
+
+  assert.match(cloud, /userAppState/);
+  assert.match(cloud, /normalizeState/);
 });
 
 test("está preparado para Vercel e Firebase", async () => {
@@ -26,8 +37,10 @@ test("está preparado para Vercel e Firebase", async () => {
     readFile(new URL("../vercel.json", import.meta.url), "utf8"),
     readFile(new URL("../firestore.rules", import.meta.url), "utf8"),
   ]);
+
   const pkg = JSON.parse(pkgText);
   const vercel = JSON.parse(vercelText);
+
   assert.equal(pkg.scripts.dev, "next dev");
   assert.equal(pkg.scripts.build, "next build");
   assert.equal(vercel.framework, "nextjs");

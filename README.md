@@ -12,11 +12,18 @@ O app combina cache local com uma garagem privada no Firebase. Depois do login, 
 - cálculo de vida útil por tempo e quilometragem;
 - comparação de orçamentos;
 - gastos e abastecimentos;
+- biblioteca técnica e linha do tempo do veículo;
 - modo garagem para celular;
 - conta por e-mail e senha;
 - sincronização em nuvem com regras de segurança do Firestore;
 - backup completo em JSON;
 - dados demonstrativos opcionais.
+
+## Base inicial do prontuário
+
+O estado inicial já vem alimentado com o Kadett GLS 1994: motor 1.8 EFI Família II, gasolina, cor branca, 528.574 km, rodas GM aro 14, filosofia da restauração, sintomas mecânicos, pendências, peças compradas e investimento aproximado de R$ 675,37.
+
+Essa base aparece no dashboard, checklist, compras/componentes, gastos, Biblioteca e História. Novos registros feitos pelo app continuam sendo persistidos no navegador e sincronizados na nuvem depois do login.
 
 ## Rodando localmente
 

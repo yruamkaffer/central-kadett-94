@@ -36,6 +36,18 @@ export function hasUserData(state: AppState) {
     || state.settings.demoMode;
 }
 
+function normalizeState(state: AppState): AppState {
+  return {
+    ...state,
+    vehicle: {
+      ...emptyState.vehicle,
+      ...state.vehicle,
+    },
+    library: state.library ?? [],
+    timeline: state.timeline ?? [],
+  };
+}
+
 export async function loadOrCreateCloudState(
   db: Firestore,
   userId: string,
@@ -47,7 +59,12 @@ export async function loadOrCreateCloudState(
   if (snapshot.exists()) {
     const data = snapshot.data() as CloudRow;
     if (isAppState(data.data)) {
-      return { state: data.data, updatedAt: data.updatedAt, migratedLocalData: false };
+      const cloudState = normalizeState(data.data);
+      if (!hasUserData(cloudState)) {
+        const saved = await saveCloudState(db, userId, emptyState);
+        return { state: emptyState, updatedAt: saved, migratedLocalData: true };
+      }
+      return { state: cloudState, updatedAt: data.updatedAt, migratedLocalData: false };
     }
   }
 
