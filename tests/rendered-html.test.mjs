@@ -51,10 +51,12 @@ test("está preparado para Vercel e Firebase", async () => {
 });
 
 test("usa visual verde neon e silhueta personalizada do Kadett", async () => {
-  const [page, css, svg] = await Promise.all([
+  const [page, css, svg, favicon, appIcon] = await Promise.all([
     readFile(new URL("../app/page.tsx", import.meta.url), "utf8"),
     readFile(new URL("../app/globals.css", import.meta.url), "utf8"),
     readFile(new URL("../public/kadett-outline.svg", import.meta.url), "utf8"),
+    readFile(new URL("../public/favicon.svg", import.meta.url), "utf8"),
+    readFile(new URL("../app/icon.svg", import.meta.url), "utf8"),
   ]);
 
   assert.match(css, /--orange:#39ff14/);
@@ -62,6 +64,11 @@ test("usa visual verde neon e silhueta personalizada do Kadett", async () => {
   assert.match(css, /color:#eef4ef/);
   assert.match(page, /KADETT GLS \/\/ CONTORNO OEM/);
   assert.match(svg, /Contorno vetorial de Chevrolet Kadett/);
+  assert.match(favicon, /kadett-outline\.svg/);
+  assert.match(favicon, /#39ff14/);
+  assert.match(favicon, /K94/);
+  assert.match(appIcon, /Central Kadett 94/);
   assert.doesNotMatch(page, /car-body/);
   assert.doesNotMatch(css, /#f16a2d/);
+  assert.doesNotMatch(favicon, /#2E9EFF/);
 });
